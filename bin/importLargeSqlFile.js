@@ -4,7 +4,8 @@ require("ep_etherpad-lite/node_modules/npm").load({}, function(er,npm) {
 
   var fs = require("fs");
 
-  var ueberDB = require("ep_etherpad-lite/node_modules/ueberDB");
+  var redis = require('redis');
+
   var settings = require("ep_etherpad-lite/node/utils/Settings");
   var log4js = require('ep_etherpad-lite/node_modules/log4js');
 
@@ -13,7 +14,6 @@ require("ep_etherpad-lite/node_modules/npm").load({}, function(er,npm) {
     writeInterval: 100,
     json: false // data is already json encoded
   };
-  var db = new ueberDB.database(settings.dbType, settings.dbSettings, dbWrapperSettings, log4js.getLogger("ueberDB"));
 
   var sqlFile = process.argv[2];
 
@@ -24,58 +24,47 @@ require("ep_etherpad-lite/node_modules/npm").load({}, function(er,npm) {
     process.exit(1);
   }
 
-  log("initializing db");
-  db.init(function(err)
-  {
-    //there was an error while initializing the database, output it and stop
-    if(err)
-    {
-      console.error("ERROR: Problem while initalizing the database");
-      console.error(err.stack ? err.stack : err);
-      process.exit(1);
+  process.stdout.write("Start importing keys...\n");
+
+  var keyNo = 0;
+  var buffer = '';
+  var fp = fs.createReadStream(sqlFile, {encoding: 'utf8'});
+  var matchRegex = RegExp('^REPLACE INTO store VALUES', 'i');
+  var redisClient = redis.createClient();
+
+  fp.on('data', function(data) {
+    var lines = data.split(/\r?\n/),
+        keyValues = [];
+
+    lines[0] = buffer + data[0];
+    buffer = lines.pop();
+
+    lines.forEach(function(l) {
+      if (matchRegex.test(l) === true) {
+        var pos = l.indexOf("', '");
+        var key = l.substr(28, pos - 28);
+        var value = l.substr(pos + 3);
+        value = value.substr(0, value.length - 2);
+        keyValues = keyValues.concat([key, unescape(value)]);
+      }
+    });
+
+    if (keyValues) {
+      redisClient.mset(keyValues, function(err) {
+        if (err) {
+          console.log(err);
+          return;
+        }
+        console.log('Saving ' + keyValues.length / 2 + ' keys to redis.');
+      })
     }
-    else
-    {
-      log("done");
-
-      process.stdout.write("Start importing keys...\n");
-
-      var keyNo = 0;
-      var buffer = '';
-      var fp = fs.createReadStream(sqlFile, {encoding: 'utf8'});
-      var matchRegex = RegExp('^REPLACE INTO store VALUES', 'i');
-
-      fp.on('data', function(data) {
-        var lines = data.split(/\r?\n/);
-
-        lines[0] = buffer + data[0];
-        buffer = lines.pop();
-
-        lines.forEach(function(l) {
-          if (matchRegex.test(l) === true) {
-            var pos = l.indexOf("', '");
-            var key = l.substr(28, pos - 28);
-            var value = l.substr(pos + 3);
-            value = value.substr(0, value.length - 2);
-            console.log("key: " + key + " val: " + value);
-            console.log("unval: " + unescape(value));
-            db.set(key, unescape(value), null);
-            keyNo++;
-          }
-        });
-      });
+  });
 
 
-      fp.on('end', function() {
-        process.stdout.write("\n");
-        process.stdout.write("done. waiting for db to finish transaction. depended on dbms this may take some time...\n");
-
-        db.doShutdown(function() {
-          log("finished, imported " + keyNo + " keys.");
-          process.exit(0);
-        });
-      });
-    }
+  fp.on('end', function() {
+    process.stdout.write("\n");
+    process.stdout.write("done. waiting for db to finish transaction. depended on dbms this may take some time...\n");
+    process.exit(0);
   });
 });
 
