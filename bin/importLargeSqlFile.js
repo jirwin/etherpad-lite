@@ -3,17 +3,10 @@ var startTime = new Date().getTime();
 require("ep_etherpad-lite/node_modules/npm").load({}, function(er,npm) {
 
   var fs = require("fs");
-
   var redis = require('redis');
 
   var settings = require("ep_etherpad-lite/node/utils/Settings");
   var log4js = require('ep_etherpad-lite/node_modules/log4js');
-
-  var dbWrapperSettings = {
-    cache: 0,
-    writeInterval: 100,
-    json: false // data is already json encoded
-  };
 
   var sqlFile = process.argv[2];
 
